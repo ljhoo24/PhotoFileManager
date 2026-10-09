@@ -5,22 +5,18 @@ import json
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QTimer, Slot, qVersion
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, Slot, qVersion
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QFileDialog,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
-    QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -31,6 +27,7 @@ from photo_file_manager.history import HistoryStore
 from photo_file_manager.history_panel import HistoryPanel, make_table
 from photo_file_manager.rules import ClassificationOptions
 from photo_file_manager.table_model import TextTableModel
+from photo_file_manager.theme import Toggle, apply_theme, button, card, label
 from photo_file_manager.workers import move_worker, preview_worker, undo_worker
 
 
@@ -51,105 +48,183 @@ class MainWindow(QMainWindow):
         )
         self.store = HistoryStore(history_path or default_history)
         self.setWindowTitle("PhotoFileManager")
-        self.resize(1120, 840)
+        self.resize(1320, 860)
+        self.setMinimumSize(1040, 720)
+        apply_theme(self)
 
         central = QWidget()
+        central.setObjectName("appRoot")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(10)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(24)
 
-        title = QLabel("PhotoFileManager")
-        title.setStyleSheet("font-size: 24px; font-weight: 600;")
-        layout.addWidget(title)
-        description = QLabel(
-            "미리보기에서 경로를 확인한 뒤 이동합니다. 작업 이력에서 되돌릴 수 있습니다."
-        )
-        layout.addWidget(description)
+        header = QHBoxLayout()
+        brand = label("PF")
+        brand.setObjectName("brand")
+        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand.setFixedSize(48, 48)
+        header.addWidget(brand)
+        heading = QVBoxLayout()
+        heading.setSpacing(3)
+        heading.addWidget(label("PhotoFileManager", "title"))
+        heading.addWidget(label("촬영 정보로 정리하고, 필요할 때 되돌리세요.", "muted"))
+        header.addSpacing(2)
+        header.addLayout(heading)
+        header.addStretch()
+        header.addWidget(label("미리보기  →  이동  →  필요할 때 되돌리기", "muted"))
+        layout.addLayout(header)
 
+        body = QHBoxLayout()
+        body.setSpacing(22)
+        layout.addLayout(body, 1)
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFixedWidth(320)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar = QWidget()
+        sidebar.setObjectName("appRoot")
+        sidebar_scroll.setWidget(sidebar)
+        settings = QVBoxLayout(sidebar)
+        settings.setContentsMargins(0, 0, 4, 0)
+        settings.setSpacing(16)
+        body.addWidget(sidebar_scroll)
+
+        folder_card = card()
+        folders = QVBoxLayout(folder_card)
+        folders.setContentsMargins(20, 20, 20, 20)
+        folders.setSpacing(8)
+        folders.addWidget(label("01   폴더 선택", "heading"))
+        folders.addWidget(label("하위 폴더의 파일도 함께 정리합니다.", "muted"))
+        folders.addSpacing(2)
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("입력 폴더 경로")
+        self.source_edit.setPlaceholderText("사진이 있는 폴더")
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("출력 폴더 경로 (없는 폴더는 자동 생성)")
-        self.source_button = QPushButton("찾아보기…")
-        self.output_button = QPushButton("찾아보기…")
+        self.output_edit.setPlaceholderText("정리한 사진을 보낼 폴더")
+        self.source_button = button("입력 폴더 선택")
+        self.output_button = button("출력 폴더 선택")
         self.source_button.clicked.connect(lambda: self._browse(self.source_edit))
         self.output_button.clicked.connect(lambda: self._browse(self.output_edit))
+        for caption, edit, browse in (
+            ("입력 폴더", self.source_edit, self.source_button),
+            ("출력 폴더", self.output_edit, self.output_button),
+        ):
+            folders.addWidget(label(caption, "caption"))
+            edit.setFixedHeight(40)
+            edit.setAccessibleName(caption)
+            edit.textChanged.connect(edit.setToolTip)
+            folders.addWidget(edit)
+            folders.addWidget(browse)
+        settings.addWidget(folder_card)
 
-        form = QFormLayout()
-        form.addRow("입력 폴더", self._folder_row(self.source_edit, self.source_button))
-        form.addRow("출력 폴더", self._folder_row(self.output_edit, self.output_button))
-        layout.addLayout(form)
-
-        group = QGroupBox("분류 옵션 · 각각 ON/OFF")
-        group_layout = QVBoxLayout(group)
-        filter_row = QHBoxLayout()
-        self.date_checkbox = QCheckBox("촬영 날짜별 분류")
-        self.extension_checkbox = QCheckBox("확장자별 분류")
-        self.camera_checkbox = QCheckBox("카메라 기종별 대분류")
-        self.date_checkbox.setToolTip("EXIF 촬영일 기준. 날짜가 없으면 미분류로 이동합니다.")
-        self.extension_checkbox.setToolTip("JPG/JPEG는 기본 폴더, RAW 계열은 RAW로 통합합니다.")
-        self.camera_checkbox.setToolTip(
-            "모든 입력 이미지의 기종이 확인되고 같으면 기종 폴더를 생략합니다."
-        )
-        for checkbox in (self.date_checkbox, self.extension_checkbox, self.camera_checkbox):
-            checkbox.setChecked(True)
-            checkbox.toggled.connect(self.update_options_hint)
-            filter_row.addWidget(checkbox)
-        filter_row.addStretch()
-        group_layout.addLayout(filter_row)
-        self.options_hint = QLabel()
+        filter_card = card()
+        filters = QVBoxLayout(filter_card)
+        filters.setContentsMargins(20, 20, 20, 20)
+        filters.setSpacing(12)
+        filters.addWidget(label("02   분류 방식", "heading"))
+        self.date_checkbox = Toggle("촬영 날짜별 분류")
+        self.extension_checkbox = Toggle("확장자별 분류")
+        self.camera_checkbox = Toggle("카메라 기종별 대분류")
+        for toggle, title, subtitle in (
+            (self.date_checkbox, "촬영 날짜", "EXIF 촬영일로 폴더 만들기"),
+            (self.extension_checkbox, "파일 형식", "RAW 통합 · JPG는 기본 폴더"),
+            (self.camera_checkbox, "카메라 기종", "여러 기종일 때 먼저 나누기"),
+        ):
+            row = card("filter")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(12, 12, 12, 12)
+            texts = QVBoxLayout()
+            texts.setSpacing(3)
+            texts.addWidget(label(title, "caption"))
+            detail = label(subtitle, "muted")
+            detail.setWordWrap(True)
+            texts.addWidget(detail)
+            row_layout.addLayout(texts, 1)
+            row_layout.addWidget(toggle)
+            toggle.setToolTip(
+                {
+                    self.date_checkbox: (
+                        "EXIF 촬영일 기준으로 분류합니다. 날짜가 없으면 미분류로 이동합니다."
+                    ),
+                    self.extension_checkbox: "JPG/JPEG는 기본 폴더, RAW 계열은 RAW로 통합합니다.",
+                    self.camera_checkbox: (
+                        "모든 이미지의 기종이 같으면 기종 폴더를 생략합니다. "
+                        "정보가 없으면 기종 미상으로 분류합니다."
+                    ),
+                }[toggle]
+            )
+            toggle.setChecked(True)
+            toggle.toggled.connect(self.update_options_hint)
+            filters.addWidget(row)
+        self.options_hint = label("")
+        self.options_hint.setObjectName("optionsHint")
         self.options_hint.setWordWrap(True)
-        group_layout.addWidget(self.options_hint)
-        layout.addWidget(group)
+        filters.addWidget(self.options_hint)
+        settings.addWidget(filter_card)
+        settings.addStretch()
         self.update_options_hint()
 
-        options = QLabel(
-            "하위 폴더 포함 · 같은 이름은 건너뜀 · 이동한 파일은 입력 폴더에서 사라집니다."
-        )
-        options.setWordWrap(True)
-        layout.addWidget(options)
+        workspace = card()
+        work = QVBoxLayout(workspace)
+        work.setContentsMargins(22, 20, 22, 18)
+        work.setSpacing(16)
+        body.addWidget(workspace, 1)
+        work_header = QHBoxLayout()
+        work_header.addWidget(label("정리할 파일", "heading"))
+        work_header.addStretch()
+        work_header.addWidget(label("같은 이름은 건너뛰고 원본을 유지합니다.", "muted"))
+        work.addLayout(work_header)
 
         actions = QHBoxLayout()
-        self.preview_button = QPushButton("1. 미리보기")
+        actions.setSpacing(10)
+        self.preview_button = button("1. 미리보기")
         self.preview_button.clicked.connect(self.start_preview)
-        self.run_button = QPushButton("2. Run · 이동")
+        self.run_button = button("2. 이동 시작", "primary")
         self.run_button.setEnabled(False)
-        self.run_button.setMinimumHeight(36)
         self.run_button.clicked.connect(self.start_run)
-        self.cancel_button = QPushButton("중지")
+        self.cancel_button = button("중지", "stop")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_run)
-        actions.addWidget(self.preview_button)
-        actions.addWidget(self.run_button)
-        actions.addWidget(self.cancel_button)
+        for action in (self.preview_button, self.run_button, self.cancel_button):
+            action.setFixedWidth(160)
+            actions.addWidget(action)
         actions.addStretch()
-        layout.addLayout(actions)
+        work.addLayout(actions)
+        work.addWidget(label("이동한 파일은 입력 폴더에서 사라집니다.", "muted"))
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 1)
-        self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
-        self.status_label = QLabel("폴더를 지정한 뒤 미리보기를 만들어 주세요.")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
-        self.log.setPlaceholderText("파일별 이동 결과가 여기에 표시됩니다. (최근 5,000줄)")
+        self.log.setPlaceholderText("작업을 시작하면 파일별 결과가 표시됩니다.")
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setDrawBase(False)
         self.preview_model = TextTableModel(
             ["입력 내 경로", "촬영일", "기종", "출력 내 경로", "상태", "안내"], self
         )
         self.preview_table = make_table(self.preview_model)
-        self.preview_table.setColumnWidth(3, 280)
+        self.preview_table.setColumnWidth(0, 150)
+        self.preview_table.setColumnWidth(2, 90)
+        self.preview_table.setColumnWidth(3, 240)
+        self.preview_table.setColumnWidth(4, 120)
         self.tabs.addTab(self.preview_table, "미리보기")
         self.history_panel = HistoryPanel(self.store)
         self.history_panel.undo_requested.connect(self.start_undo)
         self.history_panel.error.connect(self.show_error)
         self.tabs.addTab(self.history_panel, "작업 이력 · 되돌리기")
         self.tabs.addTab(self.log, "실행 로그")
-        layout.addWidget(self.tabs, 1)
+        work.addWidget(self.tabs, 1)
+
+        self.status_label = label("폴더를 선택하고 미리보기를 실행해 주세요.", "muted")
+        self.status_label.setWordWrap(True)
+        self.status_label.setMinimumHeight(32)
+        work.addWidget(self.status_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setTextVisible(False)
+        work.addWidget(self.progress_bar)
         self.source_edit.textChanged.connect(self.invalidate_preview)
         self.output_edit.textChanged.connect(self.invalidate_preview)
         for checkbox in (self.date_checkbox, self.extension_checkbox, self.camera_checkbox):
@@ -177,25 +252,12 @@ class MainWindow(QMainWindow):
         elif options.by_extension:
             parts.append("[RAW 등 · JPG는 폴더 생략]")
         parts.append("파일")
-        hint = " / ".join(parts)
+        hint = "폴더 구성\n" + " / ".join(parts)
         if not (options.by_date or options.by_extension or options.by_camera):
             hint = "분류 OFF · 입력 폴더 구조를 그대로 유지합니다."
-        elif options.by_camera:
-            hint += "\n기종이 모두 확인되고 같으면 기종 폴더 생략 · 정보가 없으면 기종 미상"
         if options.by_date:
-            hint += "\n촬영일이 없으면 미분류"
-            if options.by_extension:
-                hint += " · JPG/JPEG는 확장자 표시 생략"
+            hint += "\n날짜가 없으면 미분류"
         self.options_hint.setText(hint)
-
-    @staticmethod
-    def _folder_row(edit: QLineEdit, button: QPushButton) -> QWidget:
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(edit)
-        layout.addWidget(button)
-        return row
 
     def _browse(self, edit: QLineEdit) -> None:
         folder = QFileDialog.getExistingDirectory(

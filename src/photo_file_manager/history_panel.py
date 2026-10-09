@@ -10,15 +10,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPushButton,
     QSplitter,
-    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
 from photo_file_manager.history import HistoryError
 from photo_file_manager.table_model import TextTableModel
+from photo_file_manager.theme import EmptyTableView, button
 
 STATE_LABELS = {
     "running": "실행 중 / 비정상 종료 가능",
@@ -37,12 +36,18 @@ STATE_LABELS = {
 
 
 def make_table(model):
-    table = QTableView()
+    table = EmptyTableView()
     table.setModel(model)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setAlternatingRowColors(True)
+    table.setShowGrid(False)
+    table.verticalHeader().setDefaultSectionSize(42)
+    table.horizontalHeader().setDefaultAlignment(
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+    )
+    table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
     table.horizontalHeader().setStretchLastSection(True)
@@ -59,24 +64,32 @@ class HistoryPanel(QWidget):
         super().__init__(parent)
         self.store, self.jobs, self.busy = store, [], False
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(12)
         buttons = QHBoxLayout()
-        self.refresh_button = QPushButton("이력 새로고침")
+        self.refresh_button = button("이력 새로고침")
         self.refresh_button.clicked.connect(self.refresh)
-        self.undo_button = QPushButton("선택 작업 되돌리기")
+        self.undo_button = button("선택 작업 되돌리기")
         self.undo_button.setEnabled(False)
         self.undo_button.clicked.connect(self.request_undo)
+        self.refresh_button.setFixedWidth(160)
+        self.undo_button.setFixedWidth(160)
+        buttons.setSpacing(10)
         buttons.addWidget(self.refresh_button)
         buttons.addWidget(self.undo_button)
         buttons.addStretch()
         layout.addLayout(buttons)
         self.info = QLabel("작업을 선택하면 파일별 결과를 볼 수 있습니다.")
         self.info.setWordWrap(True)
+        self.info.setProperty("role", "muted")
         self.info.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.info)
         self.model = TextTableModel(
             ["시각", "상태", "이동", "건너뜀", "실패", "복원", "입력 → 출력"], self
         )
         self.table = make_table(self.model)
+        self.table.empty_title = "아직 작업 이력이 없습니다"
+        self.table.empty_description = "이동을 실행하면 이곳에 기록됩니다."
         self.table.setColumnWidth(0, 170)
         self.table.setColumnWidth(1, 170)
         for column in range(2, 6):
@@ -86,13 +99,15 @@ class HistoryPanel(QWidget):
             ["입력 내 원래 경로", "출력 내 이동 경로", "상태", "실행 결과", "복원 결과"], self
         )
         self.details = make_table(self.details_model)
+        self.details.empty_title = "파일별 작업 결과"
+        self.details.empty_description = "위 목록에서 작업을 선택해 주세요."
         self.details.setColumnWidth(1, 300)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.table)
         splitter.addWidget(self.details)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
-        splitter.setSizes([90, 240])
+        splitter.setSizes([150, 260])
         layout.addWidget(splitter)
 
     def selected_job(self):
@@ -131,6 +146,7 @@ class HistoryPanel(QWidget):
             ]
         )
         self.details_model.set_rows([])
+        self.details.setVisible(bool(self.jobs))
         self.undo_button.setEnabled(False)
         if self.jobs:
             row = next((i for i, job in enumerate(self.jobs) if job["id"] == selected_id), 0)
