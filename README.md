@@ -1,0 +1,144 @@
+# PhotoFileManager
+
+Windows와 macOS(Apple Silicon 포함)에서 실행하는 Python + PySide6 파일 정리 앱입니다.
+
+## 현재 동작
+
+1. 입력 폴더와 출력 폴더를 선택하거나 경로를 입력합니다.
+2. **Run · 이동**을 누르면 입력 폴더를 재귀적으로 읽습니다.
+3. 출력 폴더에 필요한 하위 폴더를 만들고 파일을 **이동**합니다.
+4. 진행률과 파일별 이동·건너뜀·실패 결과를 표시합니다.
+
+세 가지 분류 옵션은 각각 ON/OFF이며 처음에는 모두 켜져 있습니다.
+
+| 옵션 | ON | OFF |
+|---|---|---|
+| 촬영 날짜 | EXIF DateTimeOriginal 기준 `2026년 10월 09일`, 날짜 없음/오류는 `미분류` | 날짜 폴더 생략 |
+| 확장자 | JPG/JPEG는 접미사 없음, RAW 계열은 ` RAW`, 나머지는 대문자 확장자 | 확장자 구분 생략 |
+| 카메라 기종 | `출력/카메라 기종/날짜 폴더/파일` | 기종 구분 생략 |
+
+- **모든 입력 이미지의 기종이 확인되고 같으면** 카메라 옵션이 ON이어도 기종 폴더를 생략합니다.
+- 기종이 섞여 있거나 일부 이미지의 기종 정보가 없으면 카메라별로 나누고, 정보 없는 파일은 `기종 미상`으로 보냅니다.
+- ARW·CR2·CR3·NEF·DNG·RAF 등 RAW 확장자는 모두 **RAW**로 통합합니다.
+- JPG와 JPEG는 대소문자에 관계없이 같은 기본 분류입니다.
+- 날짜 OFF + 확장자 ON이면 JPG는 출력 루트(또는 기종 폴더), RAW는 그 아래 `RAW` 폴더로 갑니다.
+- 날짜 ON + 확장자 OFF이면 JPG·RAW를 같은 날짜 폴더에 넣습니다.
+- 분류가 적용되면 입력의 하위 폴더를 날짜/기종 구조로 재구성합니다. 모든 옵션을 OFF하면 기존 하위 폴더 구조를 유지합니다.
+- EXIF 날짜가 없을 때 파일 생성일/수정일로 대체하지 않으며, 기록된 촬영일에 시간대 변환을 적용하지 않습니다.
+- **일반 파일 전체**가 대상입니다. 사진 외 파일은 EXIF가 없으므로 날짜 ON이면 미분류에 들어가며, 기종 동일 여부 판단에서는 제외합니다.
+- EXIF는 ExifRead로 읽고, CR3는 CMT1/CMT2 TIFF, Fujifilm RAF는 내부 JPEG의 EXIF 메타데이터를 추가로 읽습니다. RAW 폴더로 묶는 확장자 목록과 실제 메타데이터 읽기 지원 범위는 다릅니다. 읽을 수 없는 형식/손상된 정보는 미분류·기종 미상으로 처리합니다.
+- 기종 이름의 경로 구분자/금지 문자는 안전한 문자로 바꾸며, 서로 다른 기종명이 변환 후 겹치면 구별되는 접미사를 붙입니다.
+
+같은 기종의 JPG·RAW가 섞인 경우:
+
+```text
+출력/
+├─ 2026년 10월 09일/
+│  └─ IMG_001.JPG
+├─ 2026년 10월 09일 RAW/
+│  └─ IMG_001.ARW
+├─ 미분류/
+│  └─ no_date.JPG
+└─ 미분류 RAW/
+   └─ no_date.ARW
+```
+
+기종이 섞여 있고 카메라 분류가 ON이면 위 날짜 폴더들 앞에 기종 폴더가 추가됩니다.
+
+- 기존 출력 파일·폴더는 덮어쓰지 않습니다. 이름 충돌은 건너뛰고 입력 파일을 남깁니다. 로그에 `덮어쓰기 안 함 · 입력 파일 유지`를 표시합니다.
+- 입력·출력 폴더가 같거나 어느 한쪽이 다른 쪽을 포함하면 실행하지 않습니다.
+- 심볼릭 링크와 Windows 재분석 지점(정션 등)은 이동/탐색하지 않습니다.
+- 입력의 빈 폴더는 남겨둡니다. 빈 폴더만 있는 경우 출력 폴더는 생성하지 않습니다.
+- 중지는 파일 사이에 적용됩니다. 이미 이동한 파일은 되돌리지 않습니다.
+- 작업 중 창을 닫으면 중지를 요청합니다. 처리가 끝나면 다시 닫을 수 있습니다.
+- 실행 로그는 화면에 최근 5,000줄까지 표시합니다. 영구 이력·재개·실행 취소는 아직 없습니다.
+
+## 개발 환경과 실행
+
+Python 3.11 이상을 사용합니다. 프로젝트 폴더에서 실행하세요.
+
+Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m photo_file_manager
+```
+
+macOS (M2에서는 ARM64 Python 권장):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m photo_file_manager
+```
+
+## 구조와 확장 위치
+
+- `src/photo_file_manager/app.py`: 폴더 선택, Run/중지, 백그라운드 작업, 결과 표시
+- `src/photo_file_manager/engine.py`: 폴더 검증, 탐색/계획 생성, 이동 실행
+- `src/photo_file_manager/rules.py`: ON/OFF 옵션, 카메라/날짜/확장자별 출력 규칙
+- `src/photo_file_manager/metadata.py`: EXIF 촬영일·카메라 모델 읽기
+- `src/photo_file_manager/cr3.py`: CR3 컨테이너의 CMT1/CMT2 메타데이터 읽기
+- `src/photo_file_manager/raf.py`: Fujifilm RAF 내부 JPEG의 EXIF 읽기 (RAW 픽셀은 읽지 않음)
+- `tests/`: 임시 폴더만 사용하는 파일 이동 및 UI 통합 테스트
+
+GUI는 `build_plan(..., classification=ClassificationOptions(...))`으로 분류 옵션을 전달합니다.
+카메라 단일 기종 여부를 판단하기 위해 모든 파일의 메타데이터를 읽은 뒤 이동 계획을 만듭니다.
+`classification`을 생략하는 코드 호출은 기존의 입력 구조 유지 동작을 사용합니다.
+`file_filter`는 이동 대상을 고르는 확장 지점이며, `output_rule`은 분류 옵션을 전달하지 않을 때 사용할 사용자 정의 경로 규칙입니다.
+
+## 이동의 의미
+
+성공한 파일은 출력 위치에 존재하고 입력 위치에서는 제거됩니다.
+Windows의 같은 볼륨에서는 rename을 사용합니다. macOS의 같은 볼륨에서는
+기존 파일 덮어쓰기를 방지하기 위해 hard link 생성 후 원래 경로를 제거합니다.
+다른 볼륨 또는 hard link를 지원하지 않는 파일시스템에서는 일반적인 mv처럼
+데이터를 목적지에 기록한 뒤 원본을 제거합니다. 이때 기록 실패 시 원본을 유지합니다.
+원본 제거가 실패하면 양쪽에 파일이 남을 수 있으며 실패로 표시됩니다.
+
+기본 파일 내용과 수정 시간은 보존하지만, 볼륨을 넘는 이동에서 모든 OS별
+확장 속성·ACL·대체 데이터 스트림 보존은 보장하지 않습니다.
+파일 이동 중 외부 프로그램에서 입력·출력 폴더 구조를 변경하지 마세요.
+
+## 검증
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
+
+UI 테스트는 화면을 띄우지 않는 Qt offscreen 환경에서 수행됩니다.
+맥의 실제 UI/파일 권한 동작은 macOS에서도 확인해야 합니다.
+
+## 배포 빌드
+
+각 운영체제에서 해당 환경의 가상환경 Python으로 실행합니다.
+
+```bash
+python -m pip install -e ".[build]"
+python scripts/build.py
+```
+
+Windows 결과는 `dist/PhotoFileManager/` 전체 폴더이며, 내부 exe로 실행합니다.
+macOS 결과는 `dist/PhotoFileManager.app`입니다. M2에서 ARM64 Python으로 빌드하면
+Apple Silicon용 앱을 만들 수 있습니다. 코드 서명·공증·설치 프로그램은 추후 범위입니다.
+
+저장소: https://github.com/ljhoo24/PhotoFileManager
+
+### 빌드 DLL 충돌 방지
+
+빌드는 반드시 위의 `scripts/build.py`로 실행합니다. Windows에서는 PATH를
+Python과 Windows 기본 경로로 제한하여 다른 프로그램의 ICU·시스템 호환 DLL이
+배포본에 섞이지 않도록 합니다. PyInstaller 캐시도 비우고 다시 분석합니다.
+
+빌드가 끝나면 배포본을 별도 임시 작업 폴더에서 실행해 네이티브 Qt 플랫폼,
+창 생성, 이벤트 루프 시작을 확인합니다. 화면에 창을 띄우거나 파일을 이동하지 않습니다.
+단순히 프로세스가 살아 있다는 이유로 성공 처리하지 않습니다.
+
+기존 배포본만 다시 확인하려면 다음 명령을 사용합니다.
+
+```bash
+python scripts/smoke_test.py
+```

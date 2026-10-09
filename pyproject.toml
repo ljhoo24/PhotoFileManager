@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-file-manager"
+version = "0.1.0"
+description = "A desktop file organizer for Windows and macOS"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PySide6>=6.8,<7", "ExifRead>=3.5,<4"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+build = ["pyinstaller>=6.11,<7"]
+
+[project.gui-scripts]
+photo-file-manager = "photo_file_manager.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
