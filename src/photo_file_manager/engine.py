@@ -4,7 +4,7 @@ import errno
 import os
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -25,10 +25,27 @@ class ValidationError(ValueError):
 
 
 @dataclass(frozen=True)
+class FileStamp:
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    inode: int
+    device: int
+
+    @classmethod
+    def read(cls, path: Path) -> "FileStamp":
+        info = path.stat()
+        return cls(info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, info.st_dev)
+
+
+@dataclass(frozen=True)
 class MoveItem:
     source: Path
     destination: Path
     note: str = ""
+    metadata: PhotoMetadata = field(default_factory=PhotoMetadata)
+    stamp: FileStamp | None = None
+    conflict: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +131,7 @@ def build_plan(
     source_root, output_root = validate_folders(source, output)
     items: list[MoveItem] = []
     contexts: list[FileContext] = []
+    stamps: dict[Path, FileStamp] = {}
     skipped: list[FileResult] = []
 
     def scan_error(error: OSError) -> None:
@@ -136,6 +154,7 @@ def build_plan(
             if _is_link(path) or not path.is_file():
                 skipped.append(FileResult(path, None, "skipped", "일반 파일이 아니므로 제외"))
                 continue
+            stamp = FileStamp.read(path)
             context = FileContext(path, path.relative_to(source_root))
             if not file_filter(context):
                 skipped.append(FileResult(path, None, "skipped", "필터 조건에 의해 제외"))
@@ -144,11 +163,15 @@ def build_plan(
                 needs_metadata = classification.by_date or classification.by_camera
                 metadata = read_metadata(path) if needs_metadata else PhotoMetadata()
                 context = FileContext(path, context.relative_path, metadata)
+            if FileStamp.read(path) != stamp:
+                raise ValidationError(f"미리보기 검색 중 파일이 변경됐습니다: {path}")
+            stamps[path] = stamp
             contexts.append(context)
     notes = ()
     if classification is not None:
         output_rule, note = classification_rule(contexts, classification)
         notes = (note,) if note else ()
+    planned_destinations: set[str] = set()
     for context in contexts:
         if is_cancelled():
             break
@@ -157,7 +180,25 @@ def build_plan(
             raise ValidationError(f"유효하지 않은 출력 규칙 경로: {relative}")
         destination = output_root / relative
         _check_destination(destination, output_root)
-        items.append(MoveItem(context.source, destination, context.metadata.warning))
+        key = str(destination).casefold()
+        conflict = ""
+        if os.path.lexists(destination):
+            conflict = "출력 경로에 같은 이름 존재"
+        elif key in planned_destinations:
+            conflict = "입력 파일끼리 출력 경로 중복"
+        elif any(parent.exists() and not parent.is_dir() for parent in destination.parents):
+            conflict = "출력 상위 경로에 파일 존재"
+        planned_destinations.add(key)
+        items.append(
+            MoveItem(
+                context.source,
+                destination,
+                context.metadata.warning,
+                context.metadata,
+                stamps[context.source],
+                conflict,
+            )
+        )
     return MovePlan(source_root, output_root, tuple(items), tuple(skipped), notes)
 
 
@@ -197,10 +238,21 @@ def move_file(source: Path, destination: Path) -> None:
     source.unlink()
 
 
+def check_source(item: MoveItem, source_root: Path) -> None:
+    if _is_link(item.source) or not item.source.is_file():
+        raise ValidationError("입력 파일이 사라졌거나 일반 파일이 아닙니다.")
+    _check_destination(item.source, source_root)
+    if item.stamp is not None and FileStamp.read(item.source) != item.stamp:
+        raise ValidationError(
+            "미리보기 이후 입력 파일이 변경됐습니다. 미리보기를 다시 만들어 주세요."
+        )
+
+
 def execute_plan(
     plan: MovePlan,
     *,
     on_result: Callable[[FileResult], None] = lambda _: None,
+    before_move: Callable[[MoveItem], None] = lambda _: None,
     on_progress: Callable[[int, int], None] = lambda _done, _total: None,
     is_cancelled: Callable[[], bool] = lambda: False,
 ) -> RunSummary:
@@ -214,15 +266,16 @@ def execute_plan(
         if is_cancelled():
             break
         try:
-            if _is_link(item.source) or not item.source.is_file():
-                raise ValidationError("입력 파일이 사라졌거나 일반 파일이 아닙니다.")
-            if not item.source.resolve().is_relative_to(plan.source_root):
-                raise ValidationError("입력 파일 경로가 입력 폴더를 벗어납니다.")
+            if item.conflict:
+                raise FileExistsError(item.conflict)
+            check_source(item, plan.source_root)
             _check_destination(item.destination, plan.output_root)
             if os.path.lexists(item.destination):
                 raise FileExistsError("출력 경로에 같은 이름이 이미 있습니다.")
             item.destination.parent.mkdir(parents=True, exist_ok=True)
             _check_destination(item.destination, plan.output_root)
+            before_move(item)
+            check_source(item, plan.source_root)
             move_file(item.source, item.destination)
         except FileExistsError:
             skipped += 1
